@@ -1,0 +1,4 @@
+_out/
+sheets/*.png
+__pycache__/
+*.pyc
