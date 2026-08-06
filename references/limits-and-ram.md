@@ -1,9 +1,17 @@
 # RAM, ROM and other ceilings
 
-## RAM is the ceiling, not ROM
+## RAM is the first ceiling. ROM becomes one sooner than you expect
 
 A stock pokeemerald-expansion build already uses **~86% of both EWRAM and
-IWRAM** before you add anything. ROM is not scarce — roughly 6.5 MB free of 32.
+IWRAM** before you add anything, against roughly 6.5 MB free of 32 MB of ROM.
+So RAM is what bites first, and most of this file is about RAM.
+
+**But do not read "ROM is not scarce" as a standing fact.** That 6.5 MB is
+consumed quickly by anything asset-shaped — an animated sprite set, an imported
+tileset pack, added music — and a project can go from 79% to over 90% in a
+single feature. Measure with `scripts/rom_budget.py` rather than assuming; see
+[the ROM budget](#the-rom-budget) at the bottom for where it actually goes and
+which levers return the most.
 
 Where EWRAM's ~226 KB goes:
 
@@ -74,3 +82,79 @@ which will contain whatever happens to live there, rather than an error.
 
 `(width + 15) * (height + 14) <= MAX_MAP_DATA_SIZE` (10240). All 785 vanilla
 layouts satisfy it; the largest reaches 91.8%.
+
+## The ROM budget
+
+`scripts/rom_budget.py` reads `pokeemerald.map` and answers "where is the ROM
+going". Run it rather than reasoning about it.
+
+**Two things will mislead you before you start.** `pokeemerald.gba` is exactly
+33,554,432 bytes whatever the build contains, because `gbafix -p` pads to a
+power of two — the file size tells you nothing. And an object file's size is not
+its ROM cost, because assets are `INCBIN`'d into whichever object references
+them, so every species front pic lands in one graphics object and "which file is
+big" answers nothing. Attribution has to be **by symbol**, which is why the tool
+sizes each symbol by the distance to the next one.
+
+That distance is an approximation, and it lies at section boundaries: trailing
+padding is charged to whatever precedes it, so a single symbol next to a
+boundary can look enormous. Category totals compare soundly; one symbol does
+not.
+
+### The single biggest thing in a stock expansion build is content you may not use
+
+`P_GEN_N_POKEMON` in `include/config/species_enabled.h` defaults every
+generation to `TRUE`, so the ROM carries cries, front and back pics, icons,
+palettes and species data for ~1,500 species. Measured on one build: **cries
+alone were 8.9 MB across 1,159 symbols**, and sound and music together were
+9.97 MB — 34% of the whole ROM. Cutting Gen 4–9 returned **9.38 MB**.
+
+**It is not all-or-nothing, which is the part that gets missed.** There are
+**539 `P_FAMILY_*` toggles**, and each merely *defaults* to its generation:
+
+```c
+#define P_FAMILY_TURTWIG                 P_GEN_4_POKEMON
+```
+
+So a project that needs a handful of later-generation species — starters,
+a rival's ace, one legendary — can disable the generation and force just those
+families back on. Measured on a project doing exactly that, keeping eighteen
+starter families across Gen 4–9: cutting those generations still returned
+**8.66 MB**.
+
+**EWRAM and IWRAM move by 4 bytes.** Cutting content still does not buy RAM.
+
+**Verify surviving species by the LINK MAP, not by the build succeeding.** A
+disabled family is gated with `#if P_FAMILY_X` around its `species_info` entry,
+but the SPECIES_ constant survives — `SPECIES_GRENINJA = 658` is still in the
+enum. Every reference still compiles, and the species becomes a zeroed
+`gSpeciesInfo` row: no stats, no name, no graphics. Nothing fails. The evidence
+that a species is really present is its `gMonFrontPic_*` symbol in
+`pokeemerald.map`, which is what `rom_budget.py --prefix gMonFrontPic` lists.
+
+Any checker you have written that reads `species_info` as source text cannot see
+this and will pass either way.
+
+Two things worth knowing before choosing a cut point. All eight Eeveelutions
+live under `P_FAMILY_EEVEE`, so Sylveon and Glaceon survive even a Gen 1-only
+build. And a species enum entry named `SPECIES_X_NORMAL` is the base form of a
+species that has alternate forms — the bare `SPECIES_X` is a valueless alias
+that never appears in a generated id table, while both the graphics directory
+and most third-party asset sets call it plain `x`.
+
+### Smaller reclaims
+
+Things many hacks cannot reach at all, and roughly what they hold in a stock
+expansion build:
+
+| | | |
+|---|---|---|
+| Battle Frontier | 335 KB | |
+| Colosseum multiboot | 160 KB | `gMultiBootProgram_PokemonColosseum_Start` |
+| Contest | 158 KB | |
+| Trainer Hill, Secret Bases, Mystery Event | in "other" | |
+
+These are small against the species config, and `--gc-sections` already drops
+whatever becomes genuinely unreferenced — making an intro sequence unreachable
+freed 6,504 bytes with no edit to a makefile. Reach for the family toggles
+first, and only if your species roster genuinely allows it.

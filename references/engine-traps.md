@@ -18,6 +18,9 @@ documenting.
 - [`specialvar` reads the return value](#specialvar-reads-the-return-value)
 - [Trainer defeat flags are permanent](#trainer-defeat-flags-are-permanent)
 - [A context-dependent value hard-coded](#a-context-dependent-value-hard-coded)
+- [Map names: `gMapHeader` is RAM, `MAPSEC` tables are not all bounded](#map-names-gmapheader-is-ram-mapsec-tables-are-not-all-bounded)
+- [A bare `warp` reads out of bounds](#a-bare-warp-reads-out-of-bounds)
+- [A battler's sprite id lies, and its stamp does not survive](#a-battlers-sprite-id-lies-and-its-stamp-does-not-survive)
 
 ---
 
@@ -324,3 +327,149 @@ a map the player walks at elevation 1 appears somewhere they cannot step.
 
 When you add a per-area property, **grep for the constant, not just the field**
 — the field will have been threaded through most paths and missed on one.
+
+## Map names: `gMapHeader` is RAM, `MAPSEC` tables are not all bounded
+
+Three facts, in the order they matter.
+
+**`gMapHeader` is `EWRAM_DATA`, not ROM** (`src/fieldmap.c`). It is a RAM copy
+made on every map load, so `gMapHeader.regionMapSectionId` can be **assigned at
+runtime**, the same way the events pointer is already repointed. A map reused
+for several different places does *not* need one map per name. Assume it is ROM
+and you will build maps you did not need.
+
+**A shared map means a shared name.** The name in the map-name popup comes
+from that field, so every area sharing one map announces whatever that map's
+`map.json` declared — one name, said aloud everywhere the map is reused, until
+something rewrites the RAM copy.
+
+**Both mapsec headers are GENERATED and gitignored.**
+`include/constants/region_map_sections.h` and
+`src/data/region_map/region_map_entries.h` come from
+`src/data/region_map/region_map_sections.json` through jsonproc. Editing either
+header directly **builds, links, runs and passes every check** — and is then
+erased by the next regeneration, having never appeared in a commit. `git status`
+showing fewer modified files than you edited is the only signal. Add the section
+to the JSON; one list generates both, so the enum and the entries table cannot
+drift.
+
+**Adding a `MAPSEC` without a `gRegionMapEntries` row reads out of bounds.**
+`gRegionMapEntries[]` (`src/data/region_map/region_map_entries.h`) is an
+*unsized* array — currently 209 rows — and `GetMapName` guards with
+`regionMapId < MAPSEC_NONE` (`src/region_map.c`). Those two bounds are equal
+only by convention. Insert a `MAPSEC_*` before `MAPSEC_NONE`, skip the entries
+row, and the guard passes while the index runs past the end. Every new section
+needs both.
+
+Two smaller notes for the same job. `regionMapSectionId` is `mapsec_u8_t` — a
+**u8** — so the ceiling is 255 against 209 used, about 45 free. And
+`sMapSectionToThemeId` (`src/map_name_popup.c`) is sized
+`[MAPSEC_COUNT - KANTO_MAPSEC_COUNT - 1]`, so it grows with the enum and new
+entries default to theme 0 rather than reading OOB — benign, but a new name
+gets a default popup theme unless one is chosen.
+
+**The save-select screen shows no location at all.** Emerald's continue window
+draws exactly four things — player, Pokédex, time, badges
+(`MainMenu_FormatSavegameText`). The location line is a FireRed feature. Naming
+a map does not make it appear there; that is a separate field competing for a
+window with no spare row (`MENU_HEIGHT_WIN2` is 6 tiles, rows at y=17 and y=33,
+next window at tile row 9).
+
+**And the RAM patch does not reach everything.** `GetCurrentRegionMapSectionId`
+(`src/overworld.c`) does **not** read `gMapHeader` — it calls
+`Overworld_GetMapHeaderByGroupAndId` on the saved location and reads the **ROM**
+header. So a Pokémon's met location still records what `map.json` declares,
+however many times the RAM copy was rewritten. This is the same shape as
+`GetCurrentMapType` going through `GetMapTypeByWarpData`: patching the RAM
+header buys you everything that reads `gMapHeader` and nothing that re-derives
+the header from warp data.
+
+When you patch a header field at runtime, **grep every reader of that field**
+and sort them into the two groups before believing the change is complete.
+
+---
+
+## A bare `warp` reads out of bounds
+
+**Always give `warp` a warp id or an x/y pair.** `warp MAP_X` on its own is the
+tidiest-looking form and the only one that is broken.
+
+`formatwarp` fills the missing coords with `-1`. `ScrCmd_warp` then puts those
+through `VarGet`, and **`VarGet(0xFFFF)` is an out-of-bounds read**:
+`GetVarPointer` sends anything at or above `SPECIAL_VARS_START` to
+`gSpecialVars[id - 0x8000]`, so `0xFFFF` indexes **element 32767 of a 22-entry
+array** — a pointer fetched 131068 bytes past its end, out of
+`event_scripts.o`'s own script data — and then dereferences it. `x` and `y`
+come back as whatever was lying there.
+
+`SetWarpDestination` narrows them to `s8`, so the low byte decides the symptom,
+and the common one is a coordinate outside the map. **Outside the map is not a
+black screen.** It is the map's **border metatile tiled to the horizon**, with
+the map's music playing and the player able to walk — which reads as
+"teleported into the void" and sends you hunting the warp logic, where
+everything is correct.
+
+**The reason this deserves a check and not a comment: it is stable per build.**
+That address holds ordinary script data, so a build either works or does not,
+consistently — and it flips when *an unrelated script somewhere else grows and
+moves those bytes*. A bare warp can ship working for months and then break
+because a menu three files away got longer. Nothing about the warp changed.
+
+Worth a lint of your own: fail on any argument-less warp. Vanilla never relies
+on the form — of 197 warp-family calls in the tree, not one is bare.
+
+Note that `warphole` is **not** affected — it is declared `map:req` with no
+coord parameters and reads the player's live position instead, so its bare
+vanilla call sites are correct. Check the macro in `asm/macros/event.inc`
+before assuming a command takes the `formatwarp` path.
+
+---
+
+## A battler's sprite id lies, and its stamp does not survive
+
+Anything that writes to a battler's sprite in battle — streaming frames,
+recolouring, swapping tiles — hits two separate traps, and the second only
+appears after the first is fixed.
+
+**`gBattlerSpriteIds[battler]` is often not that battler's mon sprite.** At load
+time it has not been created yet: `BtlController_HandleDrawTrainerPic` calls
+`BattleLoadMonSpriteGfx` and only *then* `CreateSprite`, so the id still holds
+whatever was there before. And the trainer slide code deliberately assigns
+`gBattlerSpriteIds[battler] = gBattleStruct->trainerSlideSpriteIds[battler]`, so
+it is sometimes a trainer's on purpose. Writing to the wrong sprite's tiles
+produces a band of garbage through a healthbox, or a Pokémon frame drawn over
+the opposing trainer. A healthbox is redrawn only on an HP change, so one bad
+write at send-out looks like permanent corruption.
+
+The engine stamps `data[0] = battler` and `data[2] = species` when it creates a
+battler's mon sprite, and checking both is the only discriminator available.
+Mon and trainer sprites come from the same `gMultiuseSpriteTemplate` and share
+`frameImages` after `AllocateMonSpritesGfx`, so template and image pointers do
+not distinguish them.
+
+**But the stamp does not survive a mon animation.**
+`Task_HandleMonAnimation` (`src/pokemon_animation.c`) zeroes `data[0]` and
+`data[2..7]` for the duration and restores them from what it saved — except it
+saves `data[0]` as `oam.paletteNum`, and saves `data[2]` off a sprite whose
+scratch an earlier animation may already have cleared. Measured after a KO
+animation, the surviving battler's `data[2]` came back as **1** rather than its
+species, and nothing ever set it right.
+
+So a guard written on the stamp alone passes at first and then fails for the
+rest of the battle. Latch the sprite id the first time the stamp proves it and
+accept that id afterwards, clearing the latch wherever the sprite is reloaded
+(`BattleLoadMonSpriteGfx` is the hook for switch-in *and* transform). Both
+protections survive: a stale id at load time is rejected because the latch is
+clear, and a re-pointed trainer id matches neither the stamp nor the latch.
+
+The symptom shape is worth recognising, because it does not look like a guard
+bug: the code keeps running and keeps writing to its own buffer, and only the
+VRAM copy stops. The sprite freezes, and then appears to *recover* on opening
+the Bag or the party menu — because those recreate the sprite and restamp it.
+
+**Headless tests cannot see any of this.** `gTestRunnerHeadless` swaps
+`sMonAnimFunctions` out for `WaitAnimEnd`, which saves and restores cleanly, so
+a test written for the freeze **passes against the live bug**. Use
+`FORCE_MOVE_ANIM(TRUE)` in any battle test that goes near a mon animation. And
+nothing headless knows which sprite the tiles actually reached, so anything
+writing OBJ VRAM gets looked at on a screen before it is believed.

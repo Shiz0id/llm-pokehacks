@@ -126,7 +126,7 @@ Read the file that matches what you are doing. Each is self-contained.
 | `references/metatile-art.md` | you need art that does not exist — composing metatiles from existing tiles, floors, walls, encounter surfaces, animated tiles |
 | `references/tilesets.md` | adding or recolouring a tileset, swapping tilesets at runtime, importing a third-party sheet, resolving tileset paths |
 | `references/weather.md` | adding or modifying a weather effect |
-| `references/limits-and-ram.md` | the linker is complaining, or you are adding anything that costs RAM |
+| `references/limits-and-ram.md` | the linker is complaining, or you are adding anything that costs RAM **or ROM** |
 
 ## Tools
 
@@ -145,6 +145,7 @@ guesswork. Every script takes the decomp repo root as `--repo` (or the
 | `validate_maps.py` | round-trip the `map.bin` codec against every vanilla layout |
 | `import_tile_sheet.py` | build a whole secondary tileset from a gridded third-party sheet |
 | `ram_budget.py` | where EWRAM and IWRAM are actually going |
+| `rom_budget.py` | where the ROM is going, by category, object or symbol prefix |
 | `tree_edges.py` | worked example of a census: what vanilla puts above and below a tree |
 
 Pillow is required for anything that renders. `scripts/README.md` has the

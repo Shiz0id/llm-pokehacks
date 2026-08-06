@@ -23,6 +23,7 @@ export POKEDECOMP_REPO=/path/to/pokeemerald-expansion
 | `derive_wall_autotile.py` | the earlier variant, keyed on **wall** neighbours. Kept because the two answer different questions |
 | `tree_edges.py` | a worked example of a census: what vanilla places above and below a tree |
 | `ram_budget.py` | where EWRAM and IWRAM actually go, by object file. Needs a built `pokeemerald.map` |
+| `rom_budget.py` | where the ROM goes, by category, by object or by symbol prefix. Needs the same map. Attribution is by SYMBOL, because assets are `INCBIN`'d into whichever object references them — and the `.gba` is always exactly 32 MB, since `gbafix -p` pads to a power of two, so its file size tells you nothing |
 
 ## Verification
 
@@ -68,5 +69,5 @@ config format; the `lapis` entry is the one that exercises the most of it
 It **owns its output directory** and rewrites every file in it on each run, so
 nothing else may append to a tileset it manages.
 
-**`ram_budget.py` needs a build.** It reads `pokeemerald.map`, which appears
-after a successful link.
+**`ram_budget.py` and `rom_budget.py` need a build.** They read
+`pokeemerald.map`, which appears after a successful link.
