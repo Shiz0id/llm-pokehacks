@@ -53,6 +53,26 @@ testing and catches a different class of bug.
 verification script, break the thing it checks on purpose and confirm it fires.
 This repeatedly caught checks that were passing vacuously.
 
+**Find out which system owns the moment of failure before fixing anything.**
+This engine runs a lot of independent things — per-frame callbacks, sprite
+callbacks, `ScriptMovement` tasks, movement-type handlers, the script context,
+the camera. Code you write lives in one of them and stops when *that* one is
+gated; the others carry on. So when something misbehaves only *sometimes*, or
+only *during* a textbox, a menu, a battle intro, the useful first question is
+not "what is my code doing wrong" but "is my code even running at that instant,
+and what else is". A behaviour that stopped being driven and a behaviour being
+driven by something else look identical on screen. Three separate fixes were
+spent on one bug that was, every time, "the thing that owns this moment is not
+my code".
+
+**Confirm the thing you are about to change is the binding constraint.** It is
+easy to measure the variable that is easy to measure. One project raised a
+path-search node budget fourfold and validated the new value across 3,000 cases
+— rigorous, correct, and completely irrelevant, because the object being pathed
+was despawned at that distance and no search was ever run. Before optimising or
+widening anything, prove the current value is what is actually stopping you,
+ideally by observing the failure rather than reasoning about it.
+
 **Measure per-instance, not in aggregate**, and never average across mixed
 categories. An aggregate over 3,000 generated maps showed no problem while a
 per-map bug was severe. A "healing power" average that pooled potions with
@@ -151,11 +171,21 @@ guesswork. Every script takes the decomp repo root as `--repo` (or the
 Pillow is required for anything that renders. `scripts/README.md` has the
 per-script detail.
 
-## Two workflow notes
+## Three workflow notes
 
 Long shell heredocs break on apostrophes in prose — write patch scripts to a
 file, or use editing tools directly. And `Path.write_text` on Windows emits
 CRLF into repo files; pass `newline='\n'`.
+
+**Never pipe `make` into `head`.** `head` exits at its line limit and the
+SIGPIPE kills the compiler mid-write, leaving truncated `.o` files with fresh
+timestamps. `make` then considers them up to date and never rebuilds them, so
+the failure surfaces much later as undefined references in files you did not
+touch — and one of them stayed valid-but-truncated ELF, so even a `nm` sweep
+missed it. Redirect to a file and read that (`make -j$(nproc) > build.log 2>&1`),
+or pipe to `tail`, which consumes the whole stream. The same applies to any long
+build or check runner. If it has already happened, delete every object newer
+than the bad build and rebuild rather than trying to identify the corrupt ones.
 
 If you are working across a WSL boundary, note that image work needs Pillow on
 whichever side has it, and the scripts resolve the repo from `--repo` rather

@@ -24,9 +24,16 @@ costs zero.
 
 ## There are free constant slots
 
-`WEATHER_COUNT` is 24, but the named values stop at `WEATHER_ABNORMAL` (15) and
-resume at `WEATHER_ROUTE119_CYCLE` (20). **16–19 are an unused gap**, already
-inside the bound, and `sWeatherNames[WEATHER_COUNT]` already sizes for them.
+`WEATHER_COUNT` is 24, but **vanilla's** named values stop at `WEATHER_ABNORMAL`
+(15) and resume at `WEATHER_ROUTE119_CYCLE` (20). **16–19 are an unused gap**,
+already inside the bound, and `sWeatherNames[WEATHER_COUNT]` already sizes for
+them.
+
+**Four is all there is, so read `include/constants/weather.h` before claiming a
+number is free** rather than trusting the figure above — a project that has
+already added weather has already eaten into them, and past 19 there is no room
+inside `WEATHER_COUNT` at all. The aggregates at 20–23 are real values, not
+padding.
 
 ## The four places a novel weather touches
 

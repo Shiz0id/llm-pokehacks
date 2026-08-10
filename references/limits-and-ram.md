@@ -2,9 +2,13 @@
 
 ## RAM is the first ceiling. ROM becomes one sooner than you expect
 
-A stock pokeemerald-expansion build already uses **~86% of both EWRAM and
-IWRAM** before you add anything, against roughly 6.5 MB free of 32 MB of ROM.
-So RAM is what bites first, and most of this file is about RAM.
+**EWRAM is 256 KiB (262,144 bytes) and IWRAM is 32 KiB (32,768 bytes.)** Those
+are hardware, they are what the linker prints its percentage against on every
+link, and nothing you configure grows them.
+
+A stock pokeemerald-expansion build already uses **~86% of both** before you add
+anything — about 225 KB of the 256 KiB — against roughly 6.5 MB free of 32 MB of
+ROM. So RAM is what bites first, and most of this file is about RAM.
 
 **But do not read "ROM is not scarce" as a standing fact.** That 6.5 MB is
 consumed quickly by anything asset-shaped — an animated sprite set, an imported
@@ -13,7 +17,7 @@ single feature. Measure with `scripts/rom_budget.py` rather than assuming; see
 [the ROM budget](#the-rom-budget) at the bottom for where it actually goes and
 which levers return the most.
 
-Where EWRAM's ~226 KB goes:
+Three fixed buffers account for most of it. Measured on one build:
 
 | bytes | object |
 |---|---|
@@ -21,21 +25,25 @@ Where EWRAM's ~226 KB goes:
 | 55,308 | `load_save.o` — SaveBlock buffers |
 | 20,524 | `fieldmap.o` — `sBackupMapData`, the map grid |
 
-**~84% is three fixed buffers.** This has three consequences that surprise
-people:
+**191,800 bytes between them: 73% of the whole region, and ~85% of everything
+that build had in use.** `HEAP_SIZE` is a project constant and does move — it
+was `0x1C500` there — so measure your own rather than reusing that row.
+
+Three consequences that surprise people:
 
 **Cutting content frees ROM, not RAM.** Making a whole intro sequence
 unreachable freed 6,504 bytes of ROM automatically via `--gc-sections`, and
 moved EWRAM and IWRAM by exactly zero. If you are deleting features to make
 room, check which room you actually need.
 
-**If EWRAM gets tight, tune `HEAP_SIZE` first.** It is 51% of all EWRAM in one
-constant. A hack that never opens contests or the Battle Frontier may not need
-vanilla's heap. But heap exhaustion fails at *runtime*, so this needs
+**If EWRAM gets tight, tune `HEAP_SIZE` first.** It is 44% of the whole region
+in a single constant, and about half of what a stock build actually uses.
+A hack that never opens contests or the Battle Frontier may not need vanilla's
+heap. But heap exhaustion fails at *runtime*, so this needs
 play-testing rather than a successful link.
 
 **Mark every new static as `EWRAM_DATA`.** Plain statics land in IWRAM, which
-has roughly 4 KB free against EWRAM's ~35 KB. Watch the linker's IWRAM line on
+has roughly 4 KiB free against EWRAM's ~35 KiB. Watch the linker's IWRAM line on
 every build — it is printed automatically and is the cheapest regression test
 you have.
 
@@ -59,9 +67,13 @@ you have.
 | `OBJECT_EVENTS_COUNT` | 16 | **live** object event sprites, player included |
 
 Object events spawn by proximity, so what matters is how many crowd one screen,
-not how many exist on the map. Weather sprite counts should be chosen against
-`MAX_SPRITES` — a map with 16 object events plus the player leaves about 47
-slots, and field effects need some of those.
+not how many exist on the map. **Off-screen ones do not merely go unrendered —
+they are destroyed**; see the object-event lifetime section of
+`engine-traps.md` before writing anything that drives one at distance.
+
+Weather sprite counts should be chosen against `MAX_SPRITES` — a map with 16
+object events plus the player leaves about 47 slots, and field effects need some
+of those.
 
 ## Field width limits that bite
 

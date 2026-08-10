@@ -10,6 +10,8 @@ documenting.
 - [Wild encounters key on the MAP](#wild-encounters-key-on-the-map)
 - [Metatile ids are tileset-pair specific](#metatile-ids-are-tileset-pair-specific)
 - [Object events: templates from RAM, count from ROM](#object-events-templates-from-ram-count-from-rom)
+- [Object events do not exist off-screen](#object-events-do-not-exist-off-screen)
+- [Scripted movement is forced, and runs from its own task](#scripted-movement-is-forced-and-runs-from-its-own-task)
 - [Item balls read their contents from ROM](#item-balls-read-their-contents-from-rom)
 - [Berry trees write SAVED state](#berry-trees-write-saved-state)
 - [Hidden items are BG events, and BG events are ROM only](#hidden-items-are-bg-events-and-bg-events-are-rom-only)
@@ -141,11 +143,95 @@ Other object event facts:
   doorway walls the exit off permanently.
 - Templates cost **no RAM to use** — the 64 entries exist whether a map
   declares one or sixty. The real ceiling is `OBJECT_EVENTS_COUNT` (16 **live**
-  sprites, player included), and objects spawn by proximity, so what matters is
-  how many crowd one screen.
+  sprites, player included). See the next section for what "live" means.
 - `OBJ_EVENT_GFX_SPECIES()` puts a Pokémon sprite on an ordinary map object,
   and `graphics/pokemon/<species>/overworld.png` already exists for every
   species. Free NPCs with no new art.
+
+## Object events do not exist off-screen
+
+**An object event outside a 19×17 window around the player is destroyed, not
+hidden.** `RemoveObjectEventIfOutsideView` keeps only what falls in
+`pos.x - 2 … pos.x + 17` by `pos.y … pos.y + 16` (it also spares anything whose
+`initialCoords` are in range), and `RemoveObjectEvent` clears the slot.
+`TrySpawnObjectEvents` rebuilds it later from its **template**.
+
+**Both of those run only from `UpdateObjectEventsForCameraUpdate`, and
+`CameraUpdate` calls it only inside `if (deltaX != 0 || deltaY != 0)`.** So the
+whole system is edge-triggered on the camera moving a tile. **A player standing
+still runs no spawn or despawn pass at all.**
+
+None of this matters for a vanilla NPC that stands where it was placed. It
+matters enormously for anything that moves an object over time — a follower, an
+escort, a pursuer, a wandering NPC you want to keep track of. Four consequences:
+
+- **`GetObjectEventIdByLocalId` returning `OBJECT_EVENTS_COUNT` does not mean
+  gone.** It means "not currently resident", which for anything more than a
+  screen away is the normal state. Code that reads it as death — ending a
+  behaviour, marking something finished, freeing state — breaks precisely when
+  the player walks away, which is usually when the behaviour mattered.
+- **A respawn comes from the template, so an object that moved returns to where
+  it started** unless the template moved with it. Vanilla NPCs rely on this;
+  anything driving an object at distance must not.
+- **To move something while it is despawned, write
+  `gSaveBlock1Ptr->objectEventTemplates[i].x/y`.** That is the only handle:
+  `TrySpawnObjectEvents` both *tests* and *spawns* from those fields, so
+  advancing the template is simultaneously how the thing moves and how it
+  reappears in the right place.
+- **Moving a template is invisible to the engine until a spawn pass runs**, and
+  if the player is standing still one never will. Call
+  `TrySpawnObjectEvents(0, 0)` yourself — `(0, 0)` is the correct camera delta
+  for a camera that has not moved, and `overworld.c` passes the same on map
+  load. It is safe to call repeatedly: it re-runs the engine's own window test
+  rather than a copy of it, and `GetAvailableObjectEventId` returns
+  `OBJECT_EVENTS_COUNT` for an already-loaded object, so nothing can spawn
+  twice.
+
+Also: **the player's collision does not see a despawned object.** The player can
+walk straight through the tile one is standing on, which in a one-wide corridor
+means the two pass through each other.
+
+Symptom to recognise: something that works only while it is on screen, and that
+"dies" or freezes the moment the player gets any distance from it.
+
+## Scripted movement is forced, and runs from its own task
+
+**There is no collision-testing walk action.** The movement actions —
+`MOVEMENT_ACTION_WALK_*` and friends, what an `applymovement` script emits and
+what any path finder you add will emit too — are all forced. Collision is tested
+by whatever *decides* the step: a `MOVEMENT_TYPE_*` handler calling
+`GetCollisionInDirection`, or your own search before it emits the action. Never
+by the action itself.
+
+So an object walking a path computed a moment ago will walk **through** the
+player if the player has since moved into it, and there is no flag to turn on.
+The fix is always to shorten the commitment or to stop the object, never to make
+the step test anything.
+
+**`ScriptMovement` steps objects from its own task**, independent of anything
+you run per frame. Two things follow:
+
+- **Gating your own update on `ArePlayerFieldControlsLocked()` does not stop a
+  walk already in flight.** The object keeps moving under menus, scripts,
+  textboxes and the trainer approach sequence. If a behaviour must end when a
+  script takes over, it has to be ended *by* that script's entry point — for
+  trainer battles that is `CheckTrainer`, immediately before
+  `InitTrainerApproachTask`, which is where the field controls get locked.
+- **`ScriptMovement_StartObjectMovementScript` returns FALSE on SUCCESS.** TRUE
+  means the object still had an unfinished script and the new one was
+  **rejected**, with the old pointer still installed and being walked. A new
+  movement issued mid-walk is therefore silently discarded unless the current
+  one is cancelled first.
+
+Stopping the script is also not the same as stopping the object.
+`ScriptMovement_StopObjectMovement` ends the *script*, but the action already in
+progress completes. `ObjectEventClearHeldMovementIfActive` is what ends that.
+
+**Object coords jump to the destination when a step begins**
+(`InitNpcForMovement` → `ShiftObjectEventCoords`), so `currentCoords` is where
+the object is *going*, not where it is drawn. That is useful rather than
+annoying: it lets you catch an overlap on the frame it starts, before the sprite
+has slid through.
 
 ## Item balls read their contents from ROM
 
